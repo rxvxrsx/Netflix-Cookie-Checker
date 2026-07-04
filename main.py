@@ -556,12 +556,13 @@ def open_webpage_with_cookies(session, link: str, json_cookies: list, filename: 
                 except Exception:
                     pass
 
-            # ── Validate: if ALL data is Unknown, cookie is likely expired ──
-            if plan == "Unknown" and email == "Unknown" and country == "Unknown":
+            # ── Validate: if no active plan found, cookie is expired/useless ──
+            #    (email may still show on page for cancelled memberships)
+            if plan == "Unknown":
                 with lock:
                     print(
                         Fore.RED
-                        + f"[❌] Cookie loaded but no account data — marking as expired ({filename})"
+                        + f"[❌] No active plan — marking as expired ({filename})"
                         + Fore.RESET
                     )
                     expired_cookies += 1

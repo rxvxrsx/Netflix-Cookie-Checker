@@ -40,6 +40,7 @@ This fork adds:
 - **Native file picker** — a Tkinter dialog window lets you browse and select your proxy list instead of editing config files
 
 ### 🔧 Fixes
+- **Expired cookie detection improved** — accounts with cancelled/expired memberships (no active plan) are now correctly flagged as expired instead of showing `[Unknown]` country/plan with `[✔️] Working`
 - **Email extraction rewritten** — now reads directly from Netflix's embedded `reactContext` JSON instead of relying on a CSS selector that no longer exists on live pages
 - **Plan extraction fixed** — regex cleanup no longer mangles plan names; `\xNN` and `\uNNNN` escape sequences are decoded correctly
 - **Country extraction** — `countryOfSignup` is now read reliably from the same JSON blob, with a proper `"Unknown"` fallback
