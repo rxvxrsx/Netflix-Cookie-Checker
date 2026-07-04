@@ -1,0 +1,27 @@
+# ── Cookie data (sensitive) ──
+json_cookies/
+working_cookies/
+working_cookies-*/
+failed_cookies/
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── IDE ──
+.vscode/
+.idea/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Virtualenv ──
+venv/
+env/
+.env
